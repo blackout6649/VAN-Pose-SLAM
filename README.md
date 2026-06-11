@@ -33,14 +33,6 @@ Execute the main script:
 python run_gtsam_python.py
 ```
 
-Expected output:
-```
-GTSAM is working.
-Loaded 50 initial poses
-Loaded 50 ground-truth poses
-Loaded 49 odometry measurements
-First pose translation: [ -59.25009372 -103.24300182   28.25299061]
-```
 
 ## Environment Details
 
@@ -62,23 +54,3 @@ All dependencies are installed automatically via conda without requiring compila
 
 ## Notes
 
-- The assignment was originally intended for MATLAB, but Python with GTSAM is functionally equivalent and avoids compilation issues.
-- If you need to restore conda SSL verification after setup:
-  ```bash
-  conda config --set ssl_verify true
-  ```
-
-## Troubleshooting
-
-**Q: Conda environment creation fails?**
-A: Ensure you are connected to the internet and your network proxy settings are correct (if behind a corporate proxy).
-
-**Q: GTSAM import error?**
-A: Verify you have activated the correct conda environment:
-```bash
-conda activate van-gtsam
-python -c "import gtsam; print('OK')"
-```
-
-**Q: Data file not found?**
-A: Make sure `data.mat` is in the same directory as `run_gtsam_python.py`.
