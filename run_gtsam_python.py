@@ -1,5 +1,7 @@
 import numpy as np
 import scipy.io as sio
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import gtsam
 from gtsam import symbol
 
@@ -10,23 +12,136 @@ def _matlab_cell_to_list(cell_array):
     return [np.array(item) for item in flat]
 
 
+def plot_trajectory(trajectory, poses3_gt):
+    """Plot 3D trajectory comparing estimated poses and ground truth.
+    
+    Args:
+        trajectory: gtsam.Values object containing estimated Pose3 objects
+        poses3_gt: List of ground truth 4x4 transformation matrices
+    """
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection="3d")
+
+    # Extract positions from estimated trajectory
+    est_positions = np.array([
+        trajectory.atPose3(symbol("x", i)).translation() 
+        for i in range(trajectory.size())
+    ])
+
+    # Extract positions from ground truth
+    gt_positions = np.array([
+        gtsam.Pose3(T).translation() 
+        for T in poses3_gt
+    ])
+
+    ax.plot(est_positions[:, 0], est_positions[:, 1], est_positions[:, 2], 
+            "r-", label="Initial Estimated Trajectory", linewidth=2)
+    ax.plot(gt_positions[:, 0], gt_positions[:, 1], gt_positions[:, 2], 
+            "g--", label="Ground Truth", linewidth=2)
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.view_init(elev=0, azim=-90)
+    ax.set_title("3D Pose SLAM Trajectory")
+    ax.legend()
+    plt.show()
+
+
+def build_factor_graph(initial_trajectory, dpose):
+    """Build the Pose SLAM factor graph using the initial trajectory as a prior estimate."""
+    graph = gtsam.NonlinearFactorGraph()
+    noise_model = gtsam.noiseModel.Diagonal.Sigmas(
+        np.array([1e-3, 1e-3, 1e-3, 0.1, 0.1, 0.1])
+    )
+
+    first_key = symbol("x", 0)
+    graph.add(gtsam.PriorFactorPose3(first_key, gtsam.Pose3(), noise_model))
+
+    for i, relative_transform in enumerate(dpose):
+        key1 = symbol("x", i)
+        key2 = symbol("x", i + 1)
+        relative_pose = gtsam.Pose3(relative_transform)
+        graph.add(gtsam.BetweenFactorPose3(key1, key2, relative_pose, noise_model))
+
+    return graph, noise_model
+
+
+def optimize_trajectory(graph, initial_estimate):
+    """Run MAP optimization for the Pose SLAM problem."""
+    optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate)
+    return optimizer.optimizeSafely()
+
+
+def plot_marginals(graph, result, poses3_gt):
+    """Plot MAP trajectory with marginal position uncertainty and ground truth."""
+    marginals = gtsam.Marginals(graph, result)
+    n = result.size()
+
+    positions = np.array([
+        result.atPose3(symbol("x", i)).translation() for i in range(n)
+    ])
+    gt_positions = np.array([
+        gtsam.Pose3(T).translation() for T in poses3_gt
+    ])
+
+    # Translation block is rows/cols 3:6 of the 6x6 Pose3 covariance (rotation first in GTSAM)
+    pos_std = np.array([
+        np.sqrt(np.diag(marginals.marginalCovariance(symbol("x", i))[3:6, 3:6]))
+        for i in range(n)
+    ])
+
+    fig = plt.figure(figsize=(12, 5))
+
+    ax = fig.add_subplot(121, projection="3d")
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2],
+            "b-", label="MAP Trajectory", linewidth=2)
+    ax.plot(gt_positions[:, 0], gt_positions[:, 1], gt_positions[:, 2],
+            "g--", label="Ground Truth", linewidth=2)
+    ax.view_init(elev=0, azim=-90)
+    ax.set_xlabel("X"); ax.set_ylabel("Y"); ax.set_zlabel("Z")
+    ax.set_title("MAP Trajectory (ZX view)")
+    ax.legend()
+
+    ax2 = fig.add_subplot(122)
+    ax2.plot(pos_std[:, 0], label="σ_x")
+    ax2.plot(pos_std[:, 1], label="σ_y")
+    ax2.plot(pos_std[:, 2], label="σ_z")
+    ax2.set_xlabel("Pose index")
+    ax2.set_ylabel("Position std (m)")
+    ax2.set_title("Marginal Position Uncertainty (1σ)")
+    ax2.legend()
+    ax2.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
 def main():
+    # Load data from MATLAB .mat file
     data = sio.loadmat("data.mat")
-    traj3 = _matlab_cell_to_list(data["traj3"])
-    poses3_gt = _matlab_cell_to_list(data["poses3_gt"])
-    dpose = _matlab_cell_to_list(data["dpose"])
+    traj3 = _matlab_cell_to_list(data["traj3"])         # Initial estimated trajectory (list of 4x4 transformation matrices)
+    poses3_gt = _matlab_cell_to_list(data["poses3_gt"]) # Ground truth poses
+    dpose = _matlab_cell_to_list(data["dpose"])         # Noisy relative pose measurements
 
-    values = gtsam.Values()
+    trajectory = gtsam.Values() # Create an empty Values object to hold the trajectory
     for i, T in enumerate(traj3):
-        values.insert(symbol("x", i), gtsam.Pose3(T))
+        trajectory.insert(symbol("x", i), gtsam.Pose3(T)) # Insert each Pose3 into the Values object with a unique key
 
-    print("GTSAM is working.")
-    print(f"Loaded {len(traj3)} initial poses")
-    print(f"Loaded {len(poses3_gt)} ground-truth poses")
-    print(f"Loaded {len(dpose)} odometry measurements")
+    # Plot the trajectory and ground truth
+    plot_trajectory(trajectory, poses3_gt) 
 
-    p0 = values.atPose3(symbol("x", 0))
-    print("First pose translation:", p0.translation())
+    graph, _ = build_factor_graph(trajectory, dpose)
+    result = optimize_trajectory(graph, trajectory)
+
+    print(
+        f"Optimized trajectory computed with {graph.size()} factors and "
+        f"{result.size()} poses in the MAP estimate."
+    )
+
+    plot_trajectory(result, poses3_gt)
+
+    plot_marginals(graph, result, poses3_gt)
 
 
 if __name__ == "__main__":
