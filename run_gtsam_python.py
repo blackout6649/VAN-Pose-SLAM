@@ -12,13 +12,8 @@ def _matlab_cell_to_list(cell_array):
     return [np.array(item) for item in flat]
 
 
-def plot_trajectory(trajectory, poses3_gt):
-    """Plot 3D trajectory comparing estimated poses and ground truth.
-    
-    Args:
-        trajectory: gtsam.Values object containing estimated Pose3 objects
-        poses3_gt: List of ground truth 4x4 transformation matrices
-    """
+def plot_trajectory(trajectory, poses3_gt, est_label="Estimated Trajectory", gt_label="Ground Truth"):
+    """Plot 3D trajectory comparing estimated poses and ground truth """
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
 
@@ -35,9 +30,9 @@ def plot_trajectory(trajectory, poses3_gt):
     ])
 
     ax.plot(est_positions[:, 0], est_positions[:, 1], est_positions[:, 2], 
-            "r-", label="Initial Estimated Trajectory", linewidth=2)
+            "r-", label=est_label, linewidth=2)
     ax.plot(gt_positions[:, 0], gt_positions[:, 1], gt_positions[:, 2], 
-            "g--", label="Ground Truth", linewidth=2)
+            "g--", label=gt_label, linewidth=2)
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -72,6 +67,47 @@ def optimize_trajectory(graph, initial_estimate):
     optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial_estimate)
     return optimizer.optimizeSafely()
 
+
+def compute_localization_error(result, poses3_gt):
+    """Compute localization error (Euclidean distance between estimated and ground truth positions).
+    
+    Args:
+        result: gtsam.Values object containing estimated Pose3 objects
+        poses3_gt: List of ground truth 4x4 transformation matrices
+    
+    Returns:
+        np.array: Localization errors for each pose
+    """
+    n = result.size()
+    errors = np.array([
+        np.linalg.norm(
+            result.atPose3(symbol("x", i)).translation() - 
+            gtsam.Pose3(poses3_gt[i]).translation()
+        )
+        for i in range(n)
+    ])
+    return errors
+
+
+def plot_localization_error(result_without_loop, result_with_loop, poses3_gt):
+    """Plot localization error over time comparing with and without loop closure."""
+    errors_without = compute_localization_error(result_without_loop, poses3_gt)
+    errors_with = compute_localization_error(result_with_loop, poses3_gt)
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    ax.plot(errors_without, "b-", label="Without Loop Closure", linewidth=2, marker="o", markersize=4)
+    ax.plot(errors_with, "r-", label="With Loop Closure", linewidth=2, marker="s", markersize=4)
+    
+    ax.set_xlabel("Pose Index")
+    ax.set_ylabel("Localization Error (meters)")
+    ax.set_title("Localization Error Analysis: Impact of Loop Closure")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
 
 def plot_marginals(graph, result, poses3_gt):
     """Plot MAP trajectory with marginal position uncertainty and ground truth."""
@@ -129,20 +165,33 @@ def main():
         trajectory.insert(symbol("x", i), gtsam.Pose3(T)) # Insert each Pose3 into the Values object with a unique key
 
     # Plot the trajectory and ground truth
-    plot_trajectory(trajectory, poses3_gt) 
+    plot_trajectory(trajectory, poses3_gt, est_label="Initial Estimated Trajectory", gt_label="Ground Truth") 
 
-    graph, _ = build_factor_graph(trajectory, dpose)
+    graph, noise_model = build_factor_graph(trajectory, dpose)
     result = optimize_trajectory(graph, trajectory)
 
-    print(
-        f"Optimized trajectory computed with {graph.size()} factors and "
-        f"{result.size()} poses in the MAP estimate."
-    )
-
-    plot_trajectory(result, poses3_gt)
+    plot_trajectory(result, poses3_gt, est_label="MAP Trajectory (Without Loop Closure)", gt_label="Ground Truth")
 
     plot_marginals(graph, result, poses3_gt)
 
+    # Loop closure
+    R21 = gtsam.Rot3(np.array([
+    [0.330571768,  0.0494690228, -0.942483486],
+    [0.0138000518, 0.998265226,   0.0572371968],
+    [0.943679959,  -0.0319273223,  0.329315626]
+    ]))
+    t21 = gtsam.Point3(-24.1616858, -0.0747429903, 275.434963)
+    loop21 = gtsam.Pose3(R21, t21)
+    # Add loop closure factor between x(t1=3) and x(t2=42)
+    graph.add(gtsam.BetweenFactorPose3(symbol("x", 3), symbol("x", 42), loop21, noise_model))
 
+    # Re-optimize with loop closure
+    result_with_loop = optimize_trajectory(graph, trajectory)
+
+    plot_trajectory(result_with_loop, poses3_gt, est_label="MAP Trajectory (With Loop Closure)", gt_label="Ground Truth")
+    plot_marginals(graph, result_with_loop, poses3_gt)
+    
+    # Localization error
+    plot_localization_error(result, result_with_loop, poses3_gt)
 if __name__ == "__main__":
     main()
