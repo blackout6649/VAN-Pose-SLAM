@@ -69,15 +69,7 @@ def optimize_trajectory(graph, initial_estimate):
 
 
 def compute_localization_error(result, poses3_gt):
-    """Compute localization error (Euclidean distance between estimated and ground truth positions).
-    
-    Args:
-        result: gtsam.Values object containing estimated Pose3 objects
-        poses3_gt: List of ground truth 4x4 transformation matrices
-    
-    Returns:
-        np.array: Localization errors for each pose
-    """
+    """Compute localization error """
     n = result.size()
     errors = np.array([
         np.linalg.norm(
